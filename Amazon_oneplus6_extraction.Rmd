@@ -1,0 +1,449 @@
+---
+title: "Sentimental Analysis of ONEPLUS 6 Phone Reviews"
+output: html_notebook
+---
+#########------------------------- DATA EXTRACTION ---------------------------###########
+Libraries required for the extraction of reviews from amazon website are:                         
+1) 'rvest': For the web scraping                                                                  
+2) 'XML': Used for pharsing the HTML data                                                        
+3) 'magrittr': Used for forward pipe operator       
+
+```{r Libraries}
+#loading required libraries
+library(rvest) 
+library(XML)
+library(magrittr) # for forward pipe operator
+```
+
+As libraries are loaded we should now assign the url 
+```{r}
+######################## Amazon Reviews #############################
+aurl <- "https://www.amazon.in/OnePlus-Mirror-Black-128GB-Storage/product-reviews/B0756VRJ25/ref=dpx_acr_txt?showViewpoints"
+#Assigning NULL to a variable
+amazon_reviews <- NULL
+```
+
+Reviews are extracted from every page by running the for loop
+```{r}
+###################### Extracting Reviews ########################## 
+for (i in 1:1800){
+  murl <- read_html(as.character(paste(aurl,i,sep="=")))
+  rev <- murl %>%
+    html_nodes(".review-text") %>%
+    html_text()
+  amazon_reviews <- c(amazon_reviews,rev)
+}
+```
+
+There are about 18,000 reviews approximately. Saving all these reviews locally in a text file
+```{r}
+write.table(amazon_reviews,"Amazon_oneplus6.txt")
+```
+
+#########------------------------- DATA CLEANING AND DATA MANIPULATION ---------------------------##########
+Data Cleaning is necessary to remove stopwords, white spaces, numbers, puntuations, html tags, convert the words into lower cases and other required transformations. Library reqiured is 'tm'
+
+```{r }
+library(tm)
+```
+creating a function for cleaning the text as tm package does not provide all necessary tools
+```{r}
+#function for cleaning text data
+stopwdrds = readLines(file.choose())
+text.clean <- function(x){
+  require("tm")
+  x  =  gsub("<.*?>", " ", x)               # for removing HTML tags
+  x = tolower(x)
+  x  =  iconv(x, "latin1", "ASCII", sub="") # Keep only ASCII characters
+  x  =  gsub("[^[:alnum:]]", " ", x)        # keep only alpha numeric 
+  x  =  removeNumbers(x)                    # removing numbers
+  x = trimws(x)
+  x  =  stripWhitespace(x)                  # removing white space
+  # removing stop words 
+  x = removeWords(x,c(stopwords("english"),stopwdrds,"told","com","https","http","phppic",
+                      "http","plc","its","niks",
+                      "hmi","goo","all","get","has","more",
+                      "for","the","has","now","our","time","that","new",
+                      "can","about","now","bit","meet","ltd","your",
+                      "you","day","one","via","pic","join","dutt",
+                      "on","it","of","in","your","is","id","gl","www","hai","don","guys","didn",
+                      "cadd","cad","centre",
+                      "mr","ws","make","training","train","check","make",
+                      "center","sso","itz","its","x"))
+  
+  return(x)
+}
+```
+
+Loading the text file
+```{r}
+x <-  readLines(file.choose())
+length(x)
+```
+The text file has 18,000 reviews in total                                                               
+The text file is coverted into corpus(collection of documents) for further cleaning
+
+```{r}
+# Preparing corpus from the text document 
+x <- text.clean(x)
+x1 = Corpus(VectorSource(x))  	# Constructs a source for a vector as input
+
+x1 = tm_map(x1, stripWhitespace) 	# removes white space
+x1 = tm_map(x1, tolower)		# converts to lower case
+x1 = tm_map(x1, removePunctuation)	# removes punctuation marks
+x1 = tm_map(x1, removeNumbers)		# removes numbers in the documents
+x1 = tm_map(x1, removeWords, c(stopwords("english"),stopwdrds,"macbook","apple","laptop","amazon"))
+```
+```{r}
+#top 5 reviews
+inspect(head(x1))
+```
+
+#########------------------------- SEMANTICS AND DATA VISUALISATION ---------------------------##########
+Required libraries to perform Text Analytics and VISUALISATIONS
+```{r}
+library(rJava)
+library(SnowballC)
+library(wordcloud)
+library(qdap)		
+library(textir)
+library(maptpx)
+library(data.table)
+library(stringr)
+library(slam)
+library(ggplot2)
+```
+
+Transforming the data to Term Document matrix
+```{r}
+# Term document frequency matrix
+tdm0 <- TermDocumentMatrix(x1)
+inspect(tdm0)
+```
+There are 811 terms and 18000 documents, the matrix represents the frequency of the terms appearing in the in each review.
+Normalising the TDM is necessary to reduce the range or the extreme values.
+The normalisation is done by dividing each frequency of terms with inverse of its average.
+```{r}
+# Term document matrix with inverse frequency 
+tdm1 <- TermDocumentMatrix(x1,control = list(weighting = function(p) weightTfIdf(p,normalize = T)))#,stemming=T))
+inspect(tdm1)
+```
+Now let's check whether the both documents that does not contain the terms or words and remove them.
+The indexes of the document is obtained.
+```{r}
+a0 <- NULL
+a1 <- NULL
+# getting the indexes of documents having count of words = 0
+for (i1 in 1:ncol(tdm0))
+{ if (sum(tdm0[, i1]) == 0) {a0 = c(a0, i1)} }
+for (i1 in 1:ncol(tdm1))
+{ if (sum(tdm1[, i1]) == 0) {a1 = c(a1, i1)} }
+length(a0)
+a0
+length(a1)
+a1
+```
+In both the TDMs there is one document without any terms i.e, the first document, so lets remove them.
+```{r}
+# Removing empty docs 
+if(length(a0)!=0){
+  tdm0 <- tdm0[,-a0]
+  
+}
+if (length(a1)!=0){
+  tdm1 <- tdm1[,-a1]
+}
+
+inspect(tdm0)
+inspect(tdm1)
+```
+
+To visualise the data we need to build word cloud. Word clouds can be of two types: positive and negative. Functions need to be build for these clouds.
+To differentiate between positive and negative words we need to call the data of positive words and negative words.
+```{r}
+# lOADING +VE AND -VE words  
+pos.words=readLines(file.choose())	# read-in positive-words.txt
+neg.words=readLines(file.choose()) 	# read-in negative-words.txt
+pos.words=c(pos.words,"wow", "kudos", "hurray") 			# including our own positive words to the existing list
+neg.words = c(neg.words)
+```
+For wordcloud function is
+```{r}
+#function for the wordcloud
+makewordc = function(x){	
+  freq = sort(rowSums(as.matrix(x)),decreasing = TRUE)
+  freq.df = data.frame(word=names(freq), freq=freq)
+  wordcloud(freq.df$word[1:85], freq.df$freq[1:85],scale = c(4,.5),random.order = F, colors=1:10)
+}
+```
+
+For positive wordcloud
+```{r}
+# Making positive wordcloud function 
+makeposwordc = function(x){
+  freq = sort(rowSums(as.matrix(x)),decreasing = TRUE)
+  # matching positive words
+  pos.matches = match(names(freq), c(pos.words,"approvals"))
+  pos.matches = !is.na(pos.matches)
+  freq_pos <- freq[pos.matches]
+  names <- names(freq_pos)
+  wordcloud(names,freq_pos,scale=c(4,.5),colors = brewer.pal(8,"Dark2"))
+}
+```
+
+For negative wordcloud
+```{r}
+# Making negatice wordcloud function
+makenegwordc = function(x){	
+  freq = sort(rowSums(as.matrix(x)),decreasing = TRUE)
+  # matching positive words
+  neg.matches = match(names(freq), neg.words)
+  neg.matches = !is.na(neg.matches)
+  freq_neg <- freq[neg.matches]
+  names <- names(freq_neg)
+  #wordcloud(names[1:120],freq_neg[1:120],scale=c(4,.5),colors = brewer.pal(8,"Dark2"))
+  wordcloud(names,freq_neg,scale=c(4,.5),colors = brewer.pal(8,"Dark2"))
+}
+```
+
+The most frequently used words can found by barplots. For barplot the funcyion is:
+```{r}
+#Barplot for the most number of words used
+words_bar_plot <- function(x){
+  freq = sort(rowSums(as.matrix(x)),decreasing = TRUE)
+  freq.df = data.frame(word=names(freq), freq=freq)
+  head(freq.df, 10)
+  library(ggplot2)
+  ggplot(head(freq.df,30), aes(reorder(word,freq), freq)) +
+    geom_bar(stat = "identity") + coord_flip() +
+    xlab("Words") + ylab("Frequency") +
+    ggtitle("Most frequent words")
+  
+}
+```
+
+For positive barplot
+```{r}
+#barplot for positve words
+pos_words_bar_plot <- function(x){
+  pos.matches = match(colnames(x), pos.words)
+  pos.matches = !is.na(pos.matches)
+  pos_words_freq = as.data.frame(apply(x, 2, sum)[pos.matches])
+  colnames(pos_words_freq)<-"freq"
+  pos_words_freq["word"] <- rownames(pos_words_freq)
+  # Sorting the words in deceasing order of their frequency
+  pos_words_freq <- pos_words_freq[order(pos_words_freq$freq,decreasing=T),]
+  ggplot(head(pos_words_freq,30), aes(reorder(word,freq), freq)) +
+    geom_bar(stat = "identity") + coord_flip() +
+    xlab("Positive words") + ylab("Frequency") +
+    ggtitle("Most frequent positive words")
+}
+```
+
+for negative barplot
+```{r}
+#barplot for the negative words
+neg_words_bar_plot <- function(x){
+  neg.matches = match(colnames(x), neg.words)
+  neg.matches = !is.na(neg.matches)
+  neg_words_freq = as.data.frame(apply(x, 2, sum)[neg.matches])
+  colnames(neg_words_freq)<-"freq"
+  neg_words_freq["word"] <- rownames(neg_words_freq)
+  # Sorting the words in deceasing order of their frequency
+  neg_words_freq <- neg_words_freq[order(neg_words_freq$freq,decreasing=T),]
+  ggplot(head(neg_words_freq,30), aes(reorder(word,freq), freq)) +
+    geom_bar(stat = "identity") + coord_flip() +
+    xlab("words") + ylab("Frequency") +
+    ggtitle("Most frequent negative words")
+}
+```
+
+cluster diagram helps us to understand the words closer to each other
+```{r}
+clusdend = function(a){	# writing func clusdend() 
+  
+  a <- inspect(a)
+  mydata.df = as.data.frame(t(as.matrix(a)));
+  dist_df <- dist(mydata.df,method="euclidean")
+  plot(hclust(dist_df,method="single"),hang=-1)
+}
+```
+
+Transpose the matrix for visualisation
+```{r}
+# Document term matrix 
+dtm0 <- t(tdm0)
+dtm1 <- t(tdm1)
+```
+
+Word cloud for frequent words
+```{r}
+makewordc(tdm0)
+```
+
+frequent words barplot
+```{r}
+words_bar_plot(tdm0)
+```
+
+word cloud for positive words
+```{r}
+makeposwordc(tdm0)
+```
+frequent positve words barplot
+```{r}
+pos_words_bar_plot(dtm0)
+```
+Negative wordcloud
+```{r}
+makenegwordc(tdm0)
+```
+
+frequent negative words
+```{r}
+neg_words_bar_plot(dtm0)
+```
+###### --------For normalised data -------- 
+word cloud for normalised data
+```{r}
+makewordc(tdm1)
+```
+barplot for normalised data
+```{r}
+words_bar_plot(tdm1)
+```
+
+Positive Word Cloud
+```{r}
+makeposwordc(tdm1)
+```
+
+Frequent positive Barplot
+
+```{r}
+pos_words_bar_plot(dtm1)
+```
+
+Negative word cloud
+```{r}
+makenegwordc(tdm1)
+```
+Frequent negative words barplots
+
+```{r}
+neg_words_bar_plot(dtm1)
+```
+
+Cluster diagram for dtm0
+```{r}
+# Cluster dendrogram on Uni gram - TF
+clusdend(dtm0)
+title(sub = "Dendrogram using TF")
+```
+The above cluster diagram shows the words close to each other
+
+
+########-------------------------- EMOTION MINING --------------------------
+```{r}
+library("syuzhet")
+```
+
+```{r}
+s_v <- get_sentences(x)
+class(s_v)
+str(s_v)
+head(s_v)
+```
+
+The get_sentiment function helps us to measure the emotions, below zero represents the negativity,zero is neutral and above zero represents positivity in sentences. There are different methods to extract emotion in each sentences
+```{r}
+sentiment_vector <- get_sentiment(s_v, method = "bing")
+head(sentiment_vector)
+```
+
+```{r}
+afinn_s_v <- get_sentiment(s_v, method = "afinn")
+head(afinn_s_v)
+```
+```{r}
+nrc_vector <- get_sentiment(s_v, method="nrc")
+head(nrc_vector)
+```
+lets consider bing method and plot line graph for first 200 reviews
+```{r}
+plot(sentiment_vector[1:200], type = "l", main = "Plot Trajectory",
+     xlab = "Narrative Time", ylab = "Emotional Valence")
+abline(h = 0, col = "red")
+```
+
+To extract the sentence with the most negative emotional valence
+```{r}
+negative <- s_v[which.min(sentiment_vector)]
+negative
+
+```
+
+To extract the most positive sentence
+```{r}
+positive <- s_v[which.max(sentiment_vector)]
+positive
+```
+
+```{r}
+# more depth
+poa_v <- x
+poa_sent <- get_sentiment(poa_v[1:200], method="bing")
+plot(
+  poa_sent, 
+  type="h", 
+  main="Example Plot Trajectory", 
+  xlab = "Narrative Time", 
+  ylab= "Emotional Valence"
+)
+```
+percentage based figures
+```{r}
+percent_vals <- get_percentage_values(poa_sent)
+
+plot(
+  percent_vals, 
+  type="l", 
+  main="Throw the ring in the volcano Using Percentage-Based Means", 
+  xlab = "Narrative Time", 
+  ylab= "Emotional Valence", 
+  col="red"
+)
+```
+
+categorize each sentence by eight emotions
+```{r}
+nrc_data <- get_nrc_sentiment(s_v)
+```
+
+```{r}
+sad_items <- which(nrc_data$sadness > 0)
+head(s_v[sad_items])
+```
+
+```{r}
+trust_items <- which(nrc_data$trust > 0)
+head(s_v[trust_items])
+```
+
+```{r}
+fear_items <- which(nrc_data$fear > 0)
+head(s_v[fear_items])
+```
+```{r}
+disgust_items <- which(nrc_data$disgust > 0)
+head(s_v[disgust_items])
+```
+
+To view the emotions as a barplot
+```{r}
+barplot(sort(colSums(prop.table(nrc_data[, 1:8]))), horiz = T, cex.names = 0.7,
+        las = 1, main = "Emotions", xlab = "Percentage",
+        col = 1:8)
+```
+
+From the above plot we can say that the phone has positivness in customers.
